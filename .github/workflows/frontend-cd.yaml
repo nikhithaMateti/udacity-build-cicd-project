@@ -45,6 +45,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --region us-east-1 --name cluster
+
+      - name: Get backend API URL
+        id: backend-url
+        run: |
+          BACKEND_HOST=$(kubectl get svc backend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "url=http://$BACKEND_HOST" >> "$GITHUB_OUTPUT"
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -53,12 +62,12 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          REACT_APP_MOVIE_API_URL: ${{ steps.backend-url.outputs.url }}
         run: |
-          docker build -t $ECR_REGISTRY/frontend:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/frontend:$IMAGE_TAG
-
-      - name: Configure kubectl
-        run: aws eks update-kubeconfig --region us-east-1 --name cluster
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL="$REACT_APP_MOVIE_API_URL" \
+            -t "$ECR_REGISTRY/frontend:$IMAGE_TAG" .
+          docker push "$ECR_REGISTRY/frontend:$IMAGE_TAG"
 
       - name: Install Kustomize
         uses: imranismail/setup-kustomize@v2
@@ -69,5 +78,5 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kustomize edit set image frontend=$ECR_REGISTRY/frontend:$IMAGE_TAG
+          kustomize edit set image frontend="$ECR_REGISTRY/frontend:$IMAGE_TAG"
           kustomize build . | kubectl apply -f -
